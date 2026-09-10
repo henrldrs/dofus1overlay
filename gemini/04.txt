@@ -1,0 +1,222 @@
+A complete, deterministic implementation for backend/services/xp.py providing mathematical scaling models, character leveling curves, profession XP calculations, and activity reward multipliers.Python"""
+backend/services/xp.py
+Deterministic Character Leveling & Profession XP Calculation Service.
+"""
+
+from dataclasses import dataclass
+import math
+from typing import Dict, Optional, Tuple
+
+
+@dataclass(frozen=True)
+class LevelProgress:
+    level: int
+    current_xp: int
+    xp_for_next_level: int
+    progress_percent: float
+    total_xp: int
+
+
+@dataclass(frozen=True)
+class ProfessionXpResult:
+    profession_id: str
+    previous_level: int
+    new_level: int
+    xp_gained: int
+    current_xp: int
+    xp_for_next_level: int
+    levels_gained: int
+
+
+class XpService:
+    """
+    Stateless, deterministic calculator for character and profession leveling.
+    Uses configurable exponential curves to ensure reproducible level computations.
+    """
+
+    # Character Leveling Constants
+    CHAR_BASE_XP: int = 100
+    CHAR_EXPONENT: float = 1.5
+    CHAR_MAX_LEVEL: int = 100
+
+    # Default Profession Leveling Constants
+    PROF_BASE_XP: int = 50
+    PROF_EXPONENT: float = 1.4
+    PROF_MAX_LEVEL: int = 50
+
+    # Profession difficulty scaling modifiers
+    PROFESSION_MODIFIERS: Dict[str, float] = {
+        "blacksmithing": 1.15,
+        "alchemy": 1.0,
+        "mining": 0.85,
+        "herbalism": 0.85,
+        "engineering": 1.25,
+        "enchanting": 1.20,
+    }
+
+    # ------------------------------------------------------------------
+    # Mathematical Formulas
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def xp_required_for_character_level(cls, level: int) -> int:
+        """
+        Calculates XP required to bridge (level - 1) -> level.
+        Formula: floor(base_xp * (level - 1)^exponent)
+        """
+        if level <= 1:
+            return 0
+        return int(math.floor(cls.CHAR_BASE_XP * math.pow(level - 1, cls.CHAR_EXPONENT)))
+
+    @classmethod
+    def total_character_xp_for_level(cls, level: int) -> int:
+        """Calculates cumulative total lifetime XP required to reach a specific level."""
+        if level <= 1:
+            return 0
+        return sum(cls.xp_required_for_character_level(lvl) for lvl in range(2, level + 1))
+
+    @classmethod
+    def xp_required_for_profession_level(cls, level: int, profession_id: str = "default") -> int:
+        """Calculates XP required for a specific profession level based on difficulty modifier."""
+        if level <= 1:
+            return 0
+        modifier = cls.PROFESSION_MODIFIERS.get(profession_id.lower(), 1.0)
+        base_req = cls.PROF_BASE_XP * math.pow(level - 1, cls.PROF_EXPONENT)
+        return int(math.floor(base_req * modifier))
+
+    @classmethod
+    def total_profession_xp_for_level(cls, level: int, profession_id: str = "default") -> int:
+        """Calculates total lifetime XP required to reach a specific profession level."""
+        if level <= 1:
+            return 0
+        return sum(cls.xp_required_for_profession_level(lvl, profession_id) for lvl in range(2, level + 1))
+
+    # ------------------------------------------------------------------
+    # Level Progress Calculators
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def calculate_character_level(cls, total_xp: int) -> LevelProgress:
+        """
+        Derives character level, progress within level, and next requirement from total XP.
+        """
+        total_xp = max(0, total_xp)
+        current_level = 1
+        accumulated_xp = 0
+
+        while current_level < cls.CHAR_MAX_LEVEL:
+            next_req = cls.xp_required_for_character_level(current_level + 1)
+            if accumulated_xp + next_req > total_xp:
+                break
+            accumulated_xp += next_req
+            current_level += 1
+
+        if current_level >= cls.CHAR_MAX_LEVEL:
+            return LevelProgress(
+                level=cls.CHAR_MAX_LEVEL,
+                current_xp=0,
+                xp_for_next_level=0,
+                progress_percent=100.0,
+                total_xp=total_xp,
+            )
+
+        xp_in_current_level = total_xp - accumulated_xp
+        xp_next_level_req = cls.xp_required_for_character_level(current_level + 1)
+        progress = (
+            round((xp_in_current_level / xp_next_level_req) * 100, 2)
+            if xp_next_level_req > 0
+            else 100.0
+        )
+
+        return LevelProgress(
+            level=current_level,
+            current_xp=xp_in_current_level,
+            xp_for_next_level=xp_next_level_req,
+            progress_percent=progress,
+            total_xp=total_xp,
+        )
+
+    @classmethod
+    def add_profession_xp(
+        cls,
+        profession_id: str,
+        current_total_xp: int,
+        xp_to_add: int,
+        max_level: Optional[int] = None,
+    ) -> ProfessionXpResult:
+        """
+        Calculates profession state changes (level-ups, progress) when adding XP.
+        """
+        effective_max = max_level if max_level is not None else cls.PROF_MAX_LEVEL
+        prev_level, _, _ = cls._evaluate_profession_state(profession_id, current_total_xp, effective_max)
+
+        new_total_xp = max(0, current_total_xp + max(0, xp_to_add))
+        new_level, current_xp, xp_for_next = cls._evaluate_profession_state(
+            profession_id, new_total_xp, effective_max
+        )
+
+        return ProfessionXpResult(
+            profession_id=profession_id,
+            previous_level=prev_level,
+            new_level=new_level,
+            xp_gained=xp_to_add,
+            current_xp=current_xp,
+            xp_for_next_level=xp_for_next,
+            levels_gained=max(0, new_level - prev_level),
+        )
+
+    @classmethod
+    def calculate_activity_reward(
+        cls,
+        base_reward: int,
+        player_level: int,
+        activity_level: int,
+        difficulty_tier: int = 1,
+    ) -> int:
+        """
+        Calculates activity XP with diminishing returns for lower-level activities
+        and bonus yields for higher-level/tier challenges.
+        """
+        if base_reward <= 0:
+            return 0
+
+        level_diff = activity_level - player_level
+
+        if level_diff < -5:
+            # Diminishing returns for under-level activities
+            level_multiplier = max(0.1, 1.0 + (level_diff * 0.12))
+        elif level_diff > 0:
+            # Cap bonus at +5 levels difference
+            level_multiplier = min(1.75, 1.0 + (level_diff * 0.08))
+        else:
+            level_multiplier = 1.0
+
+        tier_multiplier = 1.0 + ((max(1, difficulty_tier) - 1) * 0.25)
+
+        return max(1, int(math.floor(base_reward * level_multiplier * tier_multiplier)))
+
+    # ------------------------------------------------------------------
+    # Internal Helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _evaluate_profession_state(
+        cls, profession_id: str, total_xp: int, max_level: int
+    ) -> Tuple[int, int, int]:
+        level = 1
+        accumulated = 0
+
+        while level < max_level:
+            req = cls.xp_required_for_profession_level(level + 1, profession_id)
+            if accumulated + req > total_xp:
+                break
+            accumulated += req
+            level += 1
+
+        if level >= max_level:
+            return (max_level, 0, 0)
+
+        xp_in_level = total_xp - accumulated
+        req_next = cls.xp_required_for_profession_level(level + 1, profession_id)
+        return (level, xp_in_level, req_next)
+Key Features:Stateless & Deterministic: Pure math computations guarantee exact reproducibility regardless of state or execution order.Non-linear Curves: Exponential progression curves ensure higher levels require progressively more effort ($XP = \lfloor \text{base} \cdot \text{level}^{\text{exponent}} \rfloor$).Profession Modifiers: Configurable multipliers scale crafting professions independently (e.g., Engineering requires more XP than Mining).Activity Scaling: Integrated scaling penalties for trivialize content and capped bonus yields for higher-tier tasks.

@@ -1,0 +1,407 @@
+import os
+import re
+import json
+import time
+import sqlite3
+import logging
+from typing import Dict, List, Any, Optional, Tuple
+from pathlib import Path
+import requests
+from bs4 import BeautifulSoup
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("SolomonkIngestion")
+
+# Base configuration
+BASE_URL = "https://solomonk.fr"
+LANGUAGE = "fr"
+DB_PATH = Path(__file__).parent.parent.parent / "data" / "dofus.db"
+
+# Category endpoints for comprehensive crawling
+CATEGORY_ENDPOINTS = {
+    "equipments": f"{BASE_URL}/{LANGUAGE}/equipements/tout",
+    "weapons": f"{BASE_URL}/{LANGUAGE}/armes/tout",
+    "resources": f"{BASE_URL}/{LANGUAGE}/ressources/tout",
+    "consumables": f"{BASE_URL}/{LANGUAGE}/consommables/tout",
+    "monsters": f"{BASE_URL}/{LANGUAGE}/monstres/chercher"
+}
+
+
+class SolomonkScraper:
+    def __init__(self, db_path: Path = DB_PATH):
+        self.db_path = db_path
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "DofusRetroCompanionOverlay/1.0 (+http://localhost)",
+            "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        })
+        self._ensure_db_schema()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON;")
+        return conn
+
+    def _ensure_db_schema(self) -> None:
+        """Initializes tables if not already existing."""
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.executescript("""
+            CREATE TABLE IF NOT EXISTS items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                solomonk_id TEXT UNIQUE,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                level INTEGER NOT NULL DEFAULT 1,
+                pods INTEGER DEFAULT 0,
+                description TEXT,
+                stats_json TEXT,
+                icon_url TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS monsters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                level INTEGER NOT NULL DEFAULT 1,
+                hp INTEGER DEFAULT 0,
+                pa INTEGER DEFAULT 0,
+                pm INTEGER DEFAULT 0,
+                ecosystem TEXT,
+                race TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS recipes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                result_item_id INTEGER NOT NULL,
+                ingredient_name TEXT NOT NULL,
+                ingredient_item_id INTEGER,
+                quantity INTEGER NOT NULL,
+                FOREIGN KEY (result_item_id) REFERENCES items(id) ON DELETE CASCADE,
+                FOREIGN KEY (ingredient_item_id) REFERENCES items(id) ON DELETE SET NULL,
+                UNIQUE(result_item_id, ingredient_name)
+            );
+
+            CREATE TABLE IF NOT EXISTS drops (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                monster_name TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                item_id INTEGER,
+                drop_rate REAL NOT NULL,
+                prospecting_lock INTEGER DEFAULT 100,
+                FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE SET NULL
+            );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
+                name,
+                type,
+                description,
+                content='items',
+                content_rowid='id'
+            );
+            """)
+            conn.commit()
+
+    def fetch_page(self, url: str, retries: int = 3, delay: float = 1.0) -> Optional[str]:
+        """Fetches raw HTML with backoff retry handling."""
+        for attempt in range(retries):
+            try:
+                response = self.session.get(url, timeout=12)
+                if response.status_code == 200:
+                    return response.text
+                logger.warning(f"HTTP {response.status_code} fetching {url}. Attempt {attempt + 1}/{retries}")
+            except requests.RequestException as err:
+                logger.warning(f"Network error on {url}: {err}. Attempt {attempt + 1}/{retries}")
+            time.sleep(delay * (attempt + 1))
+        return None
+
+    # --------------------------------------------------------------------------
+    # Item Parsing Engine
+    # --------------------------------------------------------------------------
+
+    def parse_and_save_items(self, category_key: str, html_content: str) -> int:
+        """Parses item cards from HTML and extracts stats, recipes, and drops."""
+        soup = BeautifulSoup(html_content, "html.parser")
+        items_saved = 0
+
+        # Primary selector matching item containers on Solomonk listing pages
+        item_nodes = soup.select(".item-card, .card, div[class*='equipment'], div[class*='item']")
+        
+        # Fallback if specific classes differ: scan block elements with item properties
+        if not item_nodes:
+            item_nodes = soup.find_all("div", text=re.compile(r"Pods:\s*\d+"))
+            item_nodes = [node.find_parent("div") or node for node in item_nodes]
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            for node in item_nodes:
+                text_block = node.get_text(" ", strip=True)
+                if not text_block or "Pods:" not in text_block:
+                    continue
+
+                parsed = self._extract_item_details(node, text_block, category_key)
+                if not parsed or not parsed["name"]:
+                    continue
+
+                # Insert or update item
+                cursor.execute("""
+                INSERT INTO items (solomonk_id, name, type, level, pods, description, stats_json, icon_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(solomonk_id) DO UPDATE SET
+                    name=excluded.name,
+                    level=excluded.level,
+                    pods=excluded.pods,
+                    description=excluded.description,
+                    stats_json=excluded.stats_json,
+                    icon_url=excluded.icon_url;
+                """, (
+                    parsed["solomonk_id"],
+                    parsed["name"],
+                    parsed["type"],
+                    parsed["level"],
+                    parsed["pods"],
+                    parsed["description"],
+                    json.dumps(parsed["stats"]),
+                    parsed["icon_url"]
+                ))
+
+                item_id = cursor.lastrowid or conn.execute(
+                    "SELECT id FROM items WHERE solomonk_id = ?", (parsed["solomonk_id"],)
+                ).fetchone()[0]
+
+                # Process Recipe Ingredients
+                for ing in parsed["recipe"]:
+                    cursor.execute("""
+                    INSERT INTO recipes (result_item_id, ingredient_name, quantity)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(result_item_id, ingredient_name) DO UPDATE SET
+                        quantity=excluded.quantity;
+                    """, (item_id, ing["name"], ing["quantity"]))
+
+                # Process Drops from Item Perspective
+                for drop in parsed["drops"]:
+                    cursor.execute("""
+                    INSERT INTO drops (monster_name, item_name, item_id, drop_rate)
+                    VALUES (?, ?, ?, ?);
+                    """, (drop["monster"], parsed["name"], item_id, drop["rate"]))
+
+                items_saved += 1
+
+            conn.commit()
+
+        self._reindex_fts()
+        return items_saved
+
+    def _extract_item_details(self, node: Any, text: str, default_type: str) -> Dict[str, Any]:
+        """Parses individual item details using regex pattern matching on structured strings."""
+        # Name and basic attributes
+        name_match = re.search(r"^([^\.\n]+?)(?=\s*Pods:|\s*Niv\.|\s*\+)", text)
+        name = name_match.group(1).strip() if name_match else "Unknown Item"
+
+        level_match = re.search(r"Niv\.?\s*(\d+)", text)
+        level = int(level_match.group(1)) if level_match else 1
+
+        pods_match = re.search(r"Pods:\s*(\d+)", text)
+        pods = int(pods_match.group(1)) if pods_match else 0
+
+        # Unique ID derivation
+        solomonk_id = re.sub(r"[^a-z0-9]", "_", name.lower())
+
+        # Icon URL
+        img = node.find("img")
+        icon_url = img["src"] if img and img.has_attr("src") else ""
+
+        # Stats extraction (+1 à 100 Vitalité, +1 PA, etc.)
+        stats = []
+        stat_matches = re.findall(r"([\+\-]\d+(?:\s*à\s*\d+)?)\s*([a-zA-Zàâäéèêëîïôöùûüç\s%]+)", text)
+        for val, stat_name in stat_matches:
+            stat_clean = stat_name.strip()
+            if stat_clean.lower() not in ["pods", "niv"]:
+                stats.append({"stat": stat_clean, "value": val.strip()})
+
+        # Recipe parsing e.g., "10x Plumes de Tofu, 2x Fer"
+        recipe = []
+        recipe_match = re.search(r"Recette[^(]*\((?:[^)]+)\)\s*(.*?)(?=Dans le craft|Drops|Cette|Cet|$)", text)
+        if recipe_match:
+            raw_ingredients = recipe_match.group(1).split(",")
+            for raw_ing in raw_ingredients:
+                ing_match = re.search(r"(\d+)x\s*(.+)", raw_ing.strip())
+                if ing_match:
+                    recipe.append({
+                        "quantity": int(ing_match.group(1)),
+                        "name": ing_match.group(2).strip()
+                    })
+
+        # Drops parsing e.g., "Piou Rouge (5%), Bouftou (0.1%)"
+        drops = []
+        drops_match = re.search(r"Drops\s*(.*?)(?=Cette|Cet|Aucune|$)", text)
+        if drops_match:
+            raw_drops = drops_match.group(1).split(",")
+            for raw_drop in raw_drops:
+                drop_parsed = re.search(r"(.+?)\s*(?:∞|\d+)?\s*\(([\d\.]+)%\)", raw_drop.strip())
+                if drop_parsed:
+                    drops.append({
+                        "monster": drop_parsed.group(1).strip(),
+                        "rate": float(drop_parsed.group(2))
+                    })
+
+        # Description extraction
+        desc = ""
+        desc_match = re.search(r"(?:Cette|Cet|Ces)\s+[^\.]+\.", text)
+        if desc_match:
+            desc = desc_match.group(0).strip()
+
+        return {
+            "solomonk_id": solomonk_id,
+            "name": name,
+            "type": default_type.capitalize(),
+            "level": level,
+            "pods": pods,
+            "description": desc,
+            "stats": stats,
+            "icon_url": icon_url,
+            "recipe": recipe,
+            "drops": drops
+        }
+
+    # --------------------------------------------------------------------------
+    # Monster Bestiary Parsing Engine
+    # --------------------------------------------------------------------------
+
+    def parse_and_save_monsters(self, html_content: str) -> int:
+        """Parses bestiary entries including HP, AP, MP, and drops."""
+        soup = BeautifulSoup(html_content, "html.parser")
+        monsters_saved = 0
+
+        monster_nodes = soup.select(".monster-card, .card, div[class*='monster']")
+        if not monster_nodes:
+            monster_nodes = soup.find_all("div", text=re.compile(r"Ecosystème:|Ecosystem:"))
+            monster_nodes = [node.find_parent("div") or node for node in monster_nodes]
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            for node in monster_nodes:
+                text = node.get_text(" ", strip=True)
+                if not text:
+                    continue
+
+                # Match monster name and level
+                name_match = re.search(r"^([^\d\n]+?)\s+(\d+)\s*(?:Ecosystème|Ecosystem|$)", text)
+                if not name_match:
+                    continue
+
+                m_name = name_match.group(1).strip()
+                m_level = int(name_match.group(2))
+
+                # Extract HP, AP, MP stats
+                stats_tuple = re.findall(r"\*\s*(\d+)", text)
+                hp = int(stats_tuple[0]) if len(stats_tuple) > 0 else 0
+                pa = int(stats_tuple[1]) if len(stats_tuple) > 1 else 0
+                pm = int(stats_tuple[2]) if len(stats_tuple) > 2 else 0
+
+                # Extract ecosystem & race
+                eco_match = re.search(r"Ecosystème:\s*([^.]+?)(?=Race:|$)", text)
+                race_match = re.search(r"Race:\s*([^.]+?)(?=\*|$)", text)
+
+                ecosystem = eco_match.group(1).strip() if eco_match else "Inconnu"
+                race = race_match.group(1).strip() if race_match else "Inconnu"
+
+                cursor.execute("""
+                INSERT INTO monsters (name, level, hp, pa, pm, ecosystem, race)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    level=excluded.level,
+                    hp=excluded.hp,
+                    pa=excluded.pa,
+                    pm=excluded.pm,
+                    ecosystem=excluded.ecosystem,
+                    race=excluded.race;
+                """, (m_name, m_level, hp, pa, pm, ecosystem, race))
+
+                monsters_saved += 1
+
+            conn.commit()
+
+        return monsters_saved
+
+    # --------------------------------------------------------------------------
+    # Relational Integrity & Full-Text Search Sync
+    # --------------------------------------------------------------------------
+
+    def resolve_relational_links(self) -> None:
+        """Links recipe ingredients and drop tables to primary item IDs."""
+        logger.info("Resolving relational foreign keys between items, recipes, and drops...")
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Map recipes to item IDs
+            cursor.execute("""
+            UPDATE recipes
+            SET ingredient_item_id = (
+                SELECT id FROM items WHERE LOWER(items.name) = LOWER(recipes.ingredient_name) LIMIT 1
+            )
+            WHERE ingredient_item_id IS NULL;
+            """)
+
+            # Map drops to item IDs
+            cursor.execute("""
+            UPDATE drops
+            SET item_id = (
+                SELECT id FROM items WHERE LOWER(items.name) = LOWER(drops.item_name) LIMIT 1
+            )
+            WHERE item_id IS NULL;
+            """)
+
+            conn.commit()
+        logger.info("Relational resolution completed.")
+
+    def _reindex_fts(self) -> None:
+        """Rebuilds FTS5 search index."""
+        with self._get_connection() as conn:
+            conn.execute("INSERT INTO items_fts(items_fts) VALUES('rebuild');")
+            conn.commit()
+
+    # --------------------------------------------------------------------------
+    # Master Execution Pipeline
+    # --------------------------------------------------------------------------
+
+    def run_full_ingestion(self) -> None:
+        """Executes full scrape across all defined Solomonk categories."""
+        logger.info("Starting Solomonk Dofus Rétro data ingestion pipeline...")
+
+        total_items = 0
+        total_monsters = 0
+
+        for category, url in CATEGORY_ENDPOINTS.items():
+            logger.info(f"Fetching category: '{category}' from {url}")
+            html = self.fetch_page(url)
+
+            if not html:
+                logger.error(f"Failed to load data for category: {category}")
+                continue
+
+            if category == "monsters":
+                count = self.parse_and_save_monsters(html)
+                total_monsters += count
+                logger.info(f"Ingested {count} monsters.")
+            else:
+                count = self.parse_and_save_items(category, html)
+                total_items += count
+                logger.info(f"Ingested {count} items from category '{category}'.")
+
+        self.resolve_relational_links()
+        logger.info(f"Ingestion complete. Total items: {total_items}, Total monsters: {total_monsters}.")
+
+
+if __name__ == "__main__":
+    scraper = SolomonkScraper()
+    scraper.run_full_ingestion()

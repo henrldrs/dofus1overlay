@@ -1,0 +1,445 @@
+This baseline implementation establishes the complete project foundation: an Electron borderless overlay with global show/hide hotkeys, a Flask backend powered by SQLite + FTS5 for sub-millisecond local search, recursive recipe breakdown logic, and an Ollama/Qwen agent bridge with tool binding.
+
+1. Database Schema & FTS Setup (backend/db/schema.py)
+
+Python
+import sqlite3
+from pathlib import Path
+
+DB_PATH = Path(__file__).parent.parent.parent / "data" / "dofus.db"
+
+def init_db(db_path=DB_PATH):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.executescript("""
+    CREATE TABLE IF NOT EXISTS items (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        level INTEGER NOT NULL,
+        description TEXT,
+        stats_json TEXT, -- JSON array of {stat, min, max}
+        icon_url TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS recipes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        result_item_id INTEGER NOT NULL,
+        ingredient_item_id INTEGER NOT NULL,
+        quantity INTEGER NOT NULL,
+        FOREIGN KEY (result_item_id) REFERENCES items(id),
+        FOREIGN KEY (ingredient_item_id) REFERENCES items(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS drops (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        monster_name TEXT NOT NULL,
+        item_id INTEGER NOT NULL,
+        drop_rate REAL NOT NULL,
+        prospecting_lock INTEGER DEFAULT 100,
+        FOREIGN KEY (item_id) REFERENCES items(id)
+    );
+
+    -- Full-Text Search Virtual Table
+    CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
+        name,
+        type,
+        description,
+        content='items',
+        content_rowid='id'
+    );
+
+    -- Triggers to maintain FTS index sync
+    CREATE TRIGGER IF NOT EXISTS items_ai AFTER INSERT ON items BEGIN
+        INSERT INTO items_fts(rowid, name, type, description) 
+        VALUES (new.id, new.name, new.type, new.description);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS items_ad AFTER DELETE ON items BEGIN
+        INSERT INTO items_fts(items_fts, rowid, name, type, description) 
+        VALUES('delete', old.id, old.name, old.type, old.description);
+    END;
+    """)
+
+    conn.commit()
+    conn.close()
+
+if __name__ == "__main__":
+    init_db()
+    print("Database schema and FTS indexes initialized.")
+2. Data Ingestion Pipeline (backend/ingestion/ingest.py)
+
+Python
+import sqlite3
+import json
+from pathlib import Path
+
+DB_PATH = Path(__file__).parent.parent.parent / "data" / "dofus.db"
+
+def import_sample_dataset():
+    """Populates initial dataset including Gelano and its components."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    sample_items = [
+        (8252, "Gelano", "Ring", 60, "A famous golden ring giving +1 AP.", json.dumps([{"stat": "AP", "min": 1, "max": 1}]), "gelano.png"),
+        (2422, "Rubis", "Resource", 40, "A polished red precious gemstone.", json.dumps([]), "rubis.png"),
+        (2425, "Gelée Royale Bleue", "Resource", 50, "Royal jelly extracted from Blue Jellies.", json.dumps([]), "jelly_blue.png"),
+        (2426, "Gelée Royale Menthe", "Resource", 50, "Mint flavored royal jelly.", json.dumps([]), "jelly_mint.png")
+    ]
+
+    cursor.executemany(
+        "INSERT OR REPLACE INTO items (id, name, type, level, description, stats_json, icon_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        sample_items
+    )
+
+    sample_recipes = [
+        (8252, 2422, 10),   # Gelano needs 10 Rubis
+        (8252, 2425, 100),  # Gelano needs 100 Gelée Royale Bleue
+        (8252, 2426, 100)   # Gelano needs 100 Gelée Royale Menthe
+    ]
+
+    cursor.executemany(
+        "INSERT OR REPLACE INTO recipes (result_item_id, ingredient_item_id, quantity) VALUES (?, ?, ?)",
+        sample_recipes
+    )
+
+    sample_drops = [
+        ("Gélatine Bleue Royale", 2425, 1.5, 100),
+        ("Gélatine Menthe Royale", 2426, 1.5, 100)
+    ]
+
+    cursor.executemany(
+        "INSERT INTO drops (monster_name, item_id, drop_rate, prospecting_lock) VALUES (?, ?, ?, ?)",
+        sample_drops
+    )
+
+    conn.commit()
+    conn.close()
+    print("Sample dataset ingested successfully.")
+
+if __name__ == "__main__":
+    import_sample_dataset()
+3. Deterministic Recipe Traversal & Calculator Engine (backend/services/calculator.py)
+
+Python
+import sqlite3
+import json
+from pathlib import Path
+
+DB_PATH = Path(__file__).parent.parent.parent / "data" / "dofus.db"
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def calculate_recipe_breakdown(item_id: int, multiplier: int = 1) -> dict:
+    """Recursively computes total raw base ingredients for any craft."""
+    conn = get_db_connection()
+    
+    item = conn.execute("SELECT id, name, type, level FROM items WHERE id = ?", (item_id,)).fetchone()
+    if not item:
+        conn.close()
+        return {}
+
+    ingredients = conn.execute("""
+        SELECT r.ingredient_item_id, r.quantity, i.name, i.type, i.icon_url
+        FROM recipes r
+        JOIN items i ON r.ingredient_item_id = i.id
+        WHERE r.result_item_id = ?
+    """, (item_id,)).fetchall()
+
+    raw_totals = {}
+    direct_ingredients = []
+
+    for ing in ingredients:
+        qty = ing["quantity"] * multiplier
+        direct_ingredients.append({
+            "id": ing["ingredient_item_id"],
+            "name": ing["name"],
+            "quantity": qty,
+            "icon_url": ing["icon_url"]
+        })
+        
+        # Check sub-recipes recursively
+        sub_breakdown = calculate_recipe_breakdown(ing["ingredient_item_id"], qty)
+        if sub_breakdown.get("raw_materials"):
+            for mat_id, mat_data in sub_breakdown["raw_materials"].items():
+                if mat_id in raw_totals:
+                    raw_totals[mat_id]["quantity"] += mat_data["quantity"]
+                else:
+                    raw_totals[mat_id] = mat_data
+        else:
+            if ing["ingredient_item_id"] in raw_totals:
+                raw_totals[ing["ingredient_item_id"]]["quantity"] += qty
+            else:
+                raw_totals[ing["ingredient_item_id"]] = {
+                    "name": ing["name"],
+                    "quantity": qty
+                }
+
+    conn.close()
+
+    return {
+        "item": dict(item),
+        "target_quantity": multiplier,
+        "direct_ingredients": direct_ingredients,
+        "raw_materials": list(raw_totals.values())
+    }
+4. Flask API Server (backend/app.py)
+
+Python
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import sqlite3
+import json
+from pathlib import Path
+from services.calculator import calculate_recipe_breakdown
+
+app = Flask(__name__)
+CORS(app)
+
+DB_PATH = Path(__file__).parent.parent / "data" / "dofus.db"
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+@app.route("/api/search", methods=["GET"])
+def search():
+    query = request.args.get("q", "").strip()
+    if not query:
+        return jsonify([])
+
+    conn = get_db()
+    # FTS query with prefix wildcard search for fast response
+    results = conn.execute("""
+        SELECT i.id, i.name, i.type, i.level, i.icon_url
+        FROM items_fts fts
+        JOIN items i ON fts.rowid = i.id
+        WHERE items_fts MATCH ?
+        ORDER BY i.level DESC
+        LIMIT 20
+    """, (f"{query}*",)).fetchall()
+    
+    conn.close()
+    return jsonify([dict(r) for r in results])
+
+@app.route("/api/items/<int:item_id>", methods=["GET"])
+def get_item_detail(item_id):
+    conn = get_db()
+    item = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+    if not item:
+        conn.close()
+        return jsonify({"error": "Item not found"}), 404
+
+    item_dict = dict(item)
+    item_dict["stats"] = json.loads(item_dict["stats_json"]) if item_dict["stats_json"] else []
+
+    drops = conn.execute("SELECT monster_name, drop_rate, prospecting_lock FROM drops WHERE item_id = ?", (item_id,)).fetchall()
+    item_dict["drops"] = [dict(d) for d in drops]
+
+    conn.close()
+    return jsonify(item_dict)
+
+@app.route("/api/recipes/breakdown/<int:item_id>", methods=["GET"])
+def recipe_breakdown(item_id):
+    multiplier = int(request.args.get("qty", 1))
+    result = calculate_recipe_breakdown(item_id, multiplier)
+    return jsonify(result)
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000, debug=True)
+5. Local Qwen Agent Router (agent/router.py)
+
+Python
+import requests
+import json
+
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+BACKEND_URL = "http://127.0.0.1:5000/api"
+
+def query_agent(prompt: str) -> str:
+    """Interprets natural language questions using local Qwen model and calls backend tools."""
+    
+    system_prompt = """
+    You are a Dofus Rétro assistant. Answer briefly using database context when needed.
+    If the user asks for ingredients/crafting requirements, identify the target item name.
+    """
+
+    # 1. First pass - extract target entity via local LLM or simple fuzzy check
+    res = requests.post(OLLAMA_URL, json={
+        "model": "qwen2.5:latest",
+        "prompt": f"{system_prompt}\nUser query: {prompt}\nExtract only the item name mentioned if any, otherwise return 'NONE'.",
+        "stream": False
+    })
+    
+    extracted_item = res.json().get("response", "").strip().replace('"', '')
+
+    if extracted_item and extracted_item != "NONE":
+        # Search item in Flask API
+        search_res = requests.get(f"{BACKEND_URL}/search", params={"q": extracted_item}).json()
+        if search_res:
+            target_id = search_res[0]["id"]
+            breakdown = requests.get(f"{BACKEND_URL}/recipes/breakdown/{target_id}").json()
+            
+            # Format clean answer
+            materials = breakdown.get("raw_materials", [])
+            mat_text = ", ".join([f"{m['quantity']}x {m['name']}" for m in materials])
+            return f"To craft {breakdown['item']['name']}, you need: {mat_text}."
+
+    return "Could not determine the recipe or item from local data."
+
+if __name__ == "__main__":
+    print(query_agent("What do I need to craft a Gelano?"))
+6. Electron Main Process (electron/main.js)
+
+JavaScript
+const { app, BrowserWindow, globalShortcut, ipcMain } = require('electron');
+const path = require('path');
+
+let mainWindow;
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 420,
+    height: 650,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+
+  // Load local HTML interface
+  mainWindow.loadFile(path.join(__dirname, 'overlay', 'index.html'));
+
+  mainWindow.setAlwaysOnTop(true, 'screen-saver');
+}
+
+app.whenReady().then(() => {
+  createWindow();
+
+  // Register Alt+Shift+D hotkey to toggle overlay
+  globalShortcut.register('Alt+Shift+D', () => {
+    if (mainWindow.isVisible()) {
+      mainWindow.hide();
+    } else {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+});
+7. Preload Context Bridge (electron/preload.js)
+
+JavaScript
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('overlayAPI', {
+  searchItems: async (query) => {
+    const res = await fetch(`http://127.0.0.1:5000/api/search?q=${encodeURIComponent(query)}`);
+    return await res.json();
+  },
+  getItemDetail: async (id) => {
+    const res = await fetch(`http://127.0.0.1:5000/api/items/${id}`);
+    return await res.json();
+  },
+  getRecipeBreakdown: async (id, qty = 1) => {
+    const res = await fetch(`http://127.0.0.1:5000/api/recipes/breakdown/${id}?qty=${qty}`);
+    return await res.json();
+  }
+});
+8. Overlay UI Scaffold (electron/overlay/index.html)
+
+HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      margin: 0;
+      padding: 12px;
+      background: rgba(20, 20, 25, 0.92);
+      color: #e0e0e0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      border-radius: 8px;
+      border: 1px solid #333;
+      user-select: none;
+    }
+    .search-box {
+      width: 100%;
+      padding: 8px 12px;
+      background: #111;
+      border: 1px solid #444;
+      color: #fff;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    .results {
+      margin-top: 10px;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    .item-card {
+      padding: 8px;
+      margin-bottom: 6px;
+      background: #222;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .item-card:hover {
+      background: #2a2a35;
+    }
+  </style>
+</head>
+<body>
+  <input type="text" id="search" class="search-box" placeholder="Search item (e.g., Gelano)..." />
+  <div id="results" class="results"></div>
+
+  <script>
+    const searchInput = document.getElementById('search');
+    const resultsContainer = document.getElementById('results');
+
+    searchInput.addEventListener('input', async (e) => {
+      const query = e.target.value;
+      if (query.length < 2) {
+        resultsContainer.innerHTML = '';
+        return;
+      }
+      const items = await window.overlayAPI.searchItems(query);
+      resultsContainer.innerHTML = items.map(item => `
+        <div class="item-card" onclick="loadItem(${item.id})">
+          <strong>${item.name}</strong> <small>(Lvl ${item.level} ${item.type})</small>
+        </div>
+      `).join('');
+    });
+
+    async function loadItem(id) {
+      const breakdown = await window.overlayAPI.getRecipeBreakdown(id);
+      let html = `<h3>${breakdown.item.name} Recipe</h3><ul>`;
+      breakdown.raw_materials.forEach(m => {
+        html += `<li>${m.quantity}x ${m.name}</li>`;
+      });
+      html += '</ul>';
+      resultsContainer.innerHTML = html;
+    }
+  </script>
+</body>
+</html>

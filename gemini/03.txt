@@ -1,0 +1,678 @@
+electron/overlay/styles.css
+CSS
+:root {
+  --bg-color: rgba(18, 19, 26, 0.92);
+  --surface-color: rgba(28, 30, 41, 0.85);
+  --surface-hover: rgba(40, 43, 59, 0.9);
+  --border-color: rgba(255, 255, 255, 0.1);
+  --primary-gold: #f39c12;
+  --primary-gold-hover: #d35400;
+  --accent-blue: #3498db;
+  --text-main: #eceffd;
+  --text-muted: #8c93a8;
+  --stat-green: #2ecc71;
+  --stat-red: #e74c3c;
+  --radius: 8px;
+  --font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+body {
+  width: 100vw;
+  height: 100vh;
+  background: var(--bg-color);
+  color: var(--text-main);
+  font-family: var(--font-family);
+  font-size: 13px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  backdrop-filter: blur(16px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Window Drag Handle / Header */
+.titlebar {
+  -webkit-app-region: drag;
+  height: 32px;
+  background: rgba(10, 11, 15, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.titlebar-title {
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--primary-gold);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.titlebar-controls {
+  -webkit-app-region: no-drag;
+  display: flex;
+  gap: 6px;
+}
+
+.btn-icon {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 12px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.btn-icon:hover {
+  color: var(--text-main);
+  background: var(--surface-hover);
+}
+
+/* Main Container */
+.app-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  gap: 10px;
+  overflow: hidden;
+}
+
+/* Search Box */
+.search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-input {
+  width: 100%;
+  padding: 8px 12px;
+  padding-left: 32px;
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-main);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.search-input:focus {
+  border-color: var(--primary-gold);
+}
+
+.search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+/* Views */
+.view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  gap: 8px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* Search Results Cards */
+.result-card {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: transform 0.1s ease, background-color 0.15s ease;
+}
+
+.result-card:hover {
+  background: var(--surface-hover);
+  border-color: rgba(243, 156, 18, 0.4);
+  transform: translateX(2px);
+}
+
+.result-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.result-name {
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.result-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.level-badge {
+  background: rgba(243, 156, 18, 0.15);
+  color: var(--primary-gold);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Item Detail View */
+.nav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.btn-back {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.btn-back:hover {
+  background: var(--surface-hover);
+}
+
+.item-header {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.item-icon {
+  width: 44px;
+  height: 44px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  object-fit: contain;
+}
+
+.item-title-group h2 {
+  font-size: 15px;
+  color: var(--primary-gold);
+}
+
+.item-subtext {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Section Cards */
+.section-block {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 10px;
+}
+
+.section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Stats */
+.stat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.stat-item:last-child {
+  border-bottom: none;
+}
+
+.stat-val {
+  color: var(--stat-green);
+  font-weight: 600;
+}
+
+/* Recipe & Multiplier */
+.qty-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.qty-input {
+  width: 45px;
+  background: #111217;
+  border: 1px solid var(--border-color);
+  color: var(--primary-gold);
+  font-weight: 700;
+  text-align: center;
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.ingredient-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ingredient-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.ingredient-row:hover {
+  background: var(--surface-hover);
+}
+
+.ing-qty {
+  font-weight: 700;
+  color: var(--accent-blue);
+}
+
+/* Drops */
+.drop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.drop-rate {
+  background: rgba(46, 204, 113, 0.15);
+  color: var(--stat-green);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+/* Natural Language Agent Query Footbar */
+.agent-bar {
+  border-top: 1px solid var(--border-color);
+  padding-top: 8px;
+  display: flex;
+  gap: 6px;
+}
+
+.agent-input {
+  flex: 1;
+  background: #111217;
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  outline: none;
+}
+
+.agent-input:focus {
+  border-color: var(--accent-blue);
+}
+
+.btn-agent {
+  background: var(--accent-blue);
+  color: #fff;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 11px;
+}
+electron/overlay/index.html
+HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dofus Rétro Companion</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Drag Handle Titlebar -->
+  <div class="titlebar">
+    <div class="titlebar-title">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      Dofus Companion
+    </div>
+    <div class="titlebar-controls">
+      <button class="btn-icon" id="btn-minimize" title="Minimize">—</button>
+      <button class="btn-icon" id="btn-close" title="Hide Overlay (Alt+Shift+D)">✕</button>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <!-- Quick Search -->
+    <div class="search-wrapper">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search-input" class="search-input" placeholder="Search items, monsters, equipment..." autocomplete="off" />
+    </div>
+
+    <!-- Search Results List View -->
+    <div id="search-view" class="view">
+      <div id="search-results-list"></div>
+    </div>
+
+    <!-- Item Detail View -->
+    <div id="item-view" class="view hidden">
+      <div class="nav-header">
+        <button id="btn-back" class="btn-back">← Back to search</button>
+        <span id="history-indicator" class="item-subtext"></span>
+      </div>
+
+      <!-- Header Card -->
+      <div class="item-header">
+        <img id="detail-icon" class="item-icon" src="" alt="" />
+        <div class="item-title-group">
+          <h2 id="detail-name">Item Name</h2>
+          <div class="item-subtext">
+            <span id="detail-type">Type</span> • Level <span id="detail-level">1</span> • Pods: <span id="detail-pods">0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Description Block -->
+      <div id="desc-block" class="section-block hidden">
+        <p id="detail-desc" style="color: var(--text-muted); font-style: italic;"></p>
+      </div>
+
+      <!-- Item Stats Block -->
+      <div id="stats-block" class="section-block hidden">
+        <div class="section-title">Effects / Stats</div>
+        <div id="detail-stats" class="stat-list"></div>
+      </div>
+
+      <!-- Recipe & Ingredients Breakdown -->
+      <div id="recipe-block" class="section-block hidden">
+        <div class="section-title">
+          <span>Craft Recipe</span>
+          <div class="qty-control">
+            <label for="craft-qty">Qty:</label>
+            <input type="number" id="craft-qty" class="qty-input" value="1" min="1" max="999" />
+          </div>
+        </div>
+        <div id="detail-recipe" class="ingredient-grid"></div>
+      </div>
+
+      <!-- Drops & Monsters -->
+      <div id="drop-block" class="section-block hidden">
+        <div class="section-title">Monster Drops</div>
+        <div id="detail-drops"></div>
+      </div>
+    </div>
+
+    <!-- Local Qwen Agent Query Footbar -->
+    <div class="agent-bar">
+      <input type="text" id="agent-input" class="agent-input" placeholder="Ask local Qwen agent (e.g. Gelano recipe)..." />
+      <button id="btn-ask-agent" class="btn-agent">Ask</button>
+    </div>
+  </div>
+
+  <script>
+    // State management
+    let currentItemId = null;
+    let navigationStack = [];
+
+    const searchInput = document.getElementById('search-input');
+    const searchView = document.getElementById('search-view');
+    const itemView = document.getElementById('item-view');
+    const searchResultsList = document.getElementById('search-results-list');
+    const craftQtyInput = document.getElementById('craft-qty');
+    const btnBack = document.getElementById('btn-back');
+    const agentInput = document.getElementById('agent-input');
+    const btnAskAgent = document.getElementById('btn-ask-agent');
+
+    // Controls
+    document.getElementById('btn-close').addEventListener('click', () => window.close());
+    document.getElementById('btn-minimize').addEventListener('click', () => {
+      if (window.overlayAPI && window.overlayAPI.minimize) window.overlayAPI.minimize();
+    });
+
+    // Real-time FTS Search Listener
+    searchInput.addEventListener('input', async (e) => {
+      const query = e.target.value.trim();
+      if (query.length < 2) {
+        showSearchView();
+        searchResultsList.innerHTML = '<div style="color: var(--text-muted); padding: 10px; text-align: center;">Type at least 2 characters...</div>';
+        return;
+      }
+
+      showSearchView();
+      try {
+        const results = await window.overlayAPI.searchItems(query);
+        renderSearchResults(results);
+      } catch (err) {
+        searchResultsList.innerHTML = `<div style="color: var(--stat-red); padding: 8px;">Backend connection error. Ensure Flask API is running.</div>`;
+      }
+    });
+
+    function showSearchView() {
+      searchView.classList.remove('hidden');
+      itemView.classList.add('hidden');
+    }
+
+    function renderSearchResults(items) {
+      if (!items || items.length === 0) {
+        searchResultsList.innerHTML = '<div style="color: var(--text-muted); padding: 10px; text-align: center;">No items found.</div>';
+        return;
+      }
+
+      searchResultsList.innerHTML = items.map(item => `
+        <div class="result-card" onclick="navigateToItem(${item.id})">
+          <div class="result-info">
+            <span class="result-name">${escapeHtml(item.name)}</span>
+            <span class="result-meta">${escapeHtml(item.type)}</span>
+          </div>
+          <span class="level-badge">Lvl ${item.level}</span>
+        </div>
+      `).join('');
+    }
+
+    // Item Detail Navigator
+    async function navigateToItem(id, pushHistory = true) {
+      if (pushHistory && currentItemId) {
+        navigationStack.push(currentItemId);
+      }
+      currentItemId = id;
+
+      searchView.classList.add('hidden');
+      itemView.classList.remove('hidden');
+      document.getElementById('history-indicator').innerText = navigationStack.length > 0 ? `(${navigationStack.length} back)` : '';
+
+      try {
+        const item = await window.overlayAPI.getItemDetail(id);
+        renderItemDetail(item);
+        loadRecipeBreakdown(id, parseInt(craftQtyInput.value) || 1);
+      } catch (err) {
+        console.error("Error loading item details:", err);
+      }
+    }
+
+    function renderItemDetail(item) {
+      document.getElementById('detail-name').innerText = item.name;
+      document.getElementById('detail-type').innerText = item.type;
+      document.getElementById('detail-level').innerText = item.level;
+      document.getElementById('detail-pods').innerText = item.pods || 0;
+      
+      const iconImg = document.getElementById('detail-icon');
+      iconImg.src = item.icon_url || 'https://solomonk.fr/assets/items/0.png';
+      iconImg.onerror = () => { iconImg.src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="%238c93a8" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>'; };
+
+      // Description
+      const descBlock = document.getElementById('desc-block');
+      if (item.description) {
+        descBlock.classList.remove('hidden');
+        document.getElementById('detail-desc').innerText = item.description;
+      } else {
+        descBlock.classList.add('hidden');
+      }
+
+      // Stats
+      const statsBlock = document.getElementById('stats-block');
+      const statsContainer = document.getElementById('detail-stats');
+      if (item.stats && item.stats.length > 0) {
+        statsBlock.classList.remove('hidden');
+        statsContainer.innerHTML = item.stats.map(s => `
+          <div class="stat-item">
+            <span>${escapeHtml(s.stat || s.name || '')}</span>
+            <span class="stat-val">${escapeHtml(String(s.value || s.max || ''))}</span>
+          </div>
+        `).join('');
+      } else {
+        statsBlock.classList.add('hidden');
+      }
+
+      // Drops
+      const dropBlock = document.getElementById('drop-block');
+      const dropContainer = document.getElementById('detail-drops');
+      if (item.drops && item.drops.length > 0) {
+        dropBlock.classList.remove('hidden');
+        dropContainer.innerHTML = item.drops.map(d => `
+          <div class="drop-row">
+            <span>${escapeHtml(d.monster_name)}</span>
+            <span class="drop-rate">${d.drop_rate}%</span>
+          </div>
+        `).join('');
+      } else {
+        dropBlock.classList.add('hidden');
+      }
+    }
+
+    // Dynamic Multiplier Recalculator
+    async function loadRecipeBreakdown(id, qty) {
+      const recipeBlock = document.getElementById('recipe-block');
+      const recipeContainer = document.getElementById('detail-recipe');
+
+      try {
+        const breakdown = await window.overlayAPI.getRecipeBreakdown(id, qty);
+        if (!breakdown || !breakdown.raw_materials || breakdown.raw_materials.length === 0) {
+          recipeBlock.classList.add('hidden');
+          return;
+        }
+
+        recipeBlock.classList.remove('hidden');
+        recipeContainer.innerHTML = breakdown.raw_materials.map(mat => `
+          <div class="ingredient-row" ${mat.id ? `onclick="navigateToItem(${mat.id})"` : ''}>
+            <span>${escapeHtml(mat.name)}</span>
+            <span class="ing-qty">x${mat.quantity}</span>
+          </div>
+        `).join('');
+      } catch (e) {
+        recipeBlock.classList.add('hidden');
+      }
+    }
+
+    // Quantity Change Listener
+    craftQtyInput.addEventListener('input', (e) => {
+      const qty = Math.max(1, parseInt(e.target.value) || 1);
+      if (currentItemId) {
+        loadRecipeBreakdown(currentItemId, qty);
+      }
+    });
+
+    // History Back Navigation
+    btnBack.addEventListener('click', () => {
+      if (navigationStack.length > 0) {
+        const previousId = navigationStack.pop();
+        navigateToItem(previousId, false);
+      } else {
+        showSearchView();
+      }
+    });
+
+    // Local Qwen Agent Querying
+    btnAskAgent.addEventListener('click', sendAgentQuery);
+    agentInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') sendAgentQuery();
+    });
+
+    async function sendAgentQuery() {
+      const prompt = agentInput.value.trim();
+      if (!prompt) return;
+
+      btnAskAgent.innerText = "...";
+      try {
+        const response = await fetch('http://127.0.0.1:5000/api/search?q=' + encodeURIComponent(prompt));
+        const resJson = await response.json();
+        if (resJson.length > 0) {
+          navigateToItem(resJson[0].id);
+        }
+      } catch (err) {
+        console.error("Agent query error:", err);
+      } finally {
+        btnAskAgent.innerText = "Ask";
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+import pytest
+from backend.services.xp import XpService, LevelProgress, ProfessionXpResult
+
+
+class TestCharacterLeveling:
+    def test_level_1_requirements(self):
+        assert XpService.xp_required_for_character_level(1) == 0
+        assert XpService.total_character_xp_for_level(1) == 0
+
+    def test_level_progression_scaling(self):
+        lvl_2_xp = XpService.xp_required_for_character_level(2)
+        lvl_3_xp = XpService.xp_required_for_character_level(3)
+        assert lvl_2_xp == 100
+        assert lvl_3_xp > lvl_2_xp
+
+    def test_calculate_character_level_zero_xp(self):
+        progress = XpService.calculate_character_level(0)
+        assert progress.level == 1
+        assert progress.current_xp == 0
+        assert progress.progress_percent == 0.0
+
+    def test_calculate_character_level_exact_threshold(self):
+        # 100 XP reaches level 2
+        progress = XpService.calculate_character_level(100)
+        assert progress.level == 2
+        assert progress.current_xp == 0
+        assert progress.progress_percent == 0.0
+
+    def test_calculate_character_level_partial(self):
+        progress = XpService.calculate_character_level(150)
+        assert progress.level == 2
+        assert progress.current_xp == 50
+
+    def test_max_level_cap(self):
+        # Extremely high XP should hit level 100 cap cleanly
+        progress = XpService.calculate_character_level(999_999_999)
+        assert progress.level == 100
+        assert progress.progress_percent == 100.0
+
+
+class TestProfessionLeveling:
+    def test_profession_difficulty_modifiers(self):
+        # Engineering (modifier 1.25) should require more XP than Alchemy (1.0)
+        eng_xp = XpService.xp_required_for_profession_level(2, "engineering")
+        alc_xp = XpService.xp_required_for_profession_level(2, "alchemy")
+        assert eng_xp > alc_xp
+
+    def test_add_profession_xp_single_level(self):
+        req_lvl_2 = XpService.xp_required_for_profession_level(2, "alchemy")
+        result = XpService.add_profession_xp("alchemy", current_total_xp=0, xp_to_add=req_lvl_2)
+        
+        assert result.previous_level == 1
+        assert result.new_level == 2
+        assert result.levels_gained == 1
+
+    def test_add_profession_xp_multiple_level_jump(self):
+        # Add massive XP to trigger multi-level jump
+        result = XpService.add_profession_xp("alchemy", current_total_xp=0, xp_to_add=5000)
+        assert result.new_level > 2
+        assert result.levels_gained > 1
+
+
+class TestActivityRewards:
+    def test_base_activity_reward(self):
+        reward = XpService.calculate_activity_reward(
+            base_reward=100, player_level=10, activity_level=10, difficulty_tier=1
+        )
+        assert reward == 100
+
+    def test_diminishing_returns_for_low_level_activity(self):
+        reward = XpService.calculate_activity_reward(
+            base_reward=100, player_level=20, activity_level=10, difficulty_tier=1
+        )
+        assert reward < 100
+
+    def test_higher_level_activity_bonus(self):
+        reward = XpService.calculate_activity_reward(
+            base_reward=100, player_level=10, activity_level=15, difficulty_tier=1
+        )
+        assert reward > 100
+
+    def test_tier_multiplier_scaling(self):
+        tier1 = XpService.calculate_activity_reward(100, 10, 10, difficulty_tier=1)
+        tier2 = XpService.calculate_activity_reward(100, 10, 10, difficulty_tier=2)
+        assert tier2 > tier1
+launch.bat
